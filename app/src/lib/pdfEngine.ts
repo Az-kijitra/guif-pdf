@@ -1,4 +1,18 @@
-import { degrees, LineCapStyle, PDFDocument, rgb } from "pdf-lib";
+import {
+  degrees,
+  LineCapStyle,
+  PDFArray,
+  PDFDict,
+  PDFDocument,
+  PDFName,
+  PDFNull,
+  PDFNumber,
+  PDFObject,
+  PDFPage,
+  PDFRef,
+  PDFStream,
+  rgb,
+} from "pdf-lib";
 import { base64ToUint8Array, uint8ArrayToBase64 } from "./api";
 import { parsePageSpec } from "./pageRangeParser";
 import type {
@@ -8,6 +22,54 @@ import type {
   SplitGroupPreview,
   VirtualPage,
 } from "./types";
+
+export const ENCRYPTED_PDF_MESSAGE =
+  "このPDFは暗号化されているため、保存・抽出・分割・結合はできません（閲覧のみ）。";
+
+/**
+ * pdf-lib cannot decrypt: it would write still-encrypted page data into an unencrypted file,
+ * which turns every page blank. So such a document must never reach the output path.
+ */
+async function loadEditablePdf(bytes: Uint8Array): Promise<PDFDocument> {
+  const doc = await PDFDocument.load(bytes, { ignoreEncryption: true });
+  if (doc.isEncrypted) {
+    throw new Error(ENCRYPTED_PDF_MESSAGE);
+  }
+  return doc;
+}
+
+export interface PdfBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+function normalizeBox(box: PdfBox): PdfBox {
+  return {
+    x: Math.min(box.x, box.x + box.width),
+    y: Math.min(box.y, box.y + box.height),
+    width: Math.abs(box.width),
+    height: Math.abs(box.height),
+  };
+}
+
+/**
+ * The area the viewer shows: CropBox clipped to MediaBox, the same rule as PDF.js `page.view`.
+ * Annotations are positioned relative to this box, not to MediaBox at (0, 0).
+ */
+export function getVisibleBox(page: Pick<PDFPage, "getMediaBox" | "getCropBox">): PdfBox {
+  const media = normalizeBox(page.getMediaBox());
+  const crop = normalizeBox(page.getCropBox());
+  const left = Math.max(media.x, crop.x);
+  const bottom = Math.max(media.y, crop.y);
+  const right = Math.min(media.x + media.width, crop.x + crop.width);
+  const top = Math.min(media.y + media.height, crop.y + crop.height);
+  if (right <= left || top <= bottom) {
+    return media;
+  }
+  return { x: left, y: bottom, width: right - left, height: top - bottom };
+}
 
 export function hexToRgbColor(hex: string) {
   const clean = hex.replace("#", "").trim();
@@ -36,30 +98,32 @@ export function displayNormToPdfPoint(
   ny: number,
   unrotatedW: number,
   unrotatedH: number,
-  totalRotation: number
+  totalRotation: number,
+  originX = 0,
+  originY = 0
 ): { x: number; y: number } {
   const rot = ((totalRotation % 360) + 360) % 360;
   switch (rot) {
     case 90:
       return {
-        x: ny * unrotatedW,
-        y: nx * unrotatedH,
+        x: originX + ny * unrotatedW,
+        y: originY + nx * unrotatedH,
       };
     case 180:
       return {
-        x: (1 - nx) * unrotatedW,
-        y: ny * unrotatedH,
+        x: originX + (1 - nx) * unrotatedW,
+        y: originY + ny * unrotatedH,
       };
     case 270:
       return {
-        x: (1 - ny) * unrotatedW,
-        y: (1 - nx) * unrotatedH,
+        x: originX + (1 - ny) * unrotatedW,
+        y: originY + (1 - nx) * unrotatedH,
       };
     case 0:
     default:
       return {
-        x: nx * unrotatedW,
-        y: (1 - ny) * unrotatedH,
+        x: originX + nx * unrotatedW,
+        y: originY + (1 - ny) * unrotatedH,
       };
   }
 }
@@ -68,21 +132,27 @@ export function displayRectToPdfBox(
   rect: NormalizedRect,
   unrotatedW: number,
   unrotatedH: number,
-  totalRotation: number
-): { x: number; y: number; width: number; height: number } {
+  totalRotation: number,
+  originX = 0,
+  originY = 0
+): PdfBox {
   const p1 = displayNormToPdfPoint(
     rect.x,
     rect.y,
     unrotatedW,
     unrotatedH,
-    totalRotation
+    totalRotation,
+    originX,
+    originY
   );
   const p2 = displayNormToPdfPoint(
     rect.x + rect.w,
     rect.y + rect.h,
     unrotatedW,
     unrotatedH,
-    totalRotation
+    totalRotation,
+    originX,
+    originY
   );
   return {
     x: Math.min(p1.x, p2.x),
@@ -245,14 +315,18 @@ async function renderTextOrStickyToPngBytes(
  */
 async function bakePageAnnotations(
   pdfDoc: PDFDocument,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  pdfPage: any,
+  pdfPage: PDFPage,
   vPage: VirtualPage,
   pageAnnotations: PdfAnnotation[]
 ): Promise<void> {
   if (!pageAnnotations || pageAnnotations.length === 0) return;
 
-  const { width: unrotatedW, height: unrotatedH } = pdfPage.getSize();
+  const {
+    x: originX,
+    y: originY,
+    width: unrotatedW,
+    height: unrotatedH,
+  } = getVisibleBox(pdfPage);
   const totalRotation = ((vPage.baseRotation + vPage.addedRotation) % 360 + 360) % 360;
   const isSwapped = totalRotation === 90 || totalRotation === 270;
   const displayW = isSwapped ? unrotatedH : unrotatedW;
@@ -263,7 +337,7 @@ async function bakePageAnnotations(
 
     if (ann.kind === "highlight") {
       for (const r of ann.rects) {
-        const box = displayRectToPdfBox(r, unrotatedW, unrotatedH, totalRotation);
+        const box = displayRectToPdfBox(r, unrotatedW, unrotatedH, totalRotation, originX, originY);
         pdfPage.drawRectangle({
           x: box.x,
           y: box.y,
@@ -275,7 +349,7 @@ async function bakePageAnnotations(
       }
     } else if (ann.kind === "rect") {
       for (const r of ann.rects) {
-        const box = displayRectToPdfBox(r, unrotatedW, unrotatedH, totalRotation);
+        const box = displayRectToPdfBox(r, unrotatedW, unrotatedH, totalRotation, originX, originY);
         pdfPage.drawRectangle({
           x: box.x,
           y: box.y,
@@ -293,14 +367,18 @@ async function bakePageAnnotations(
           ann.points[0].y,
           unrotatedW,
           unrotatedH,
-          totalRotation
+          totalRotation,
+          originX,
+          originY
         );
         const end = displayNormToPdfPoint(
           ann.points[ann.points.length - 1].x,
           ann.points[ann.points.length - 1].y,
           unrotatedW,
           unrotatedH,
-          totalRotation
+          totalRotation,
+          originX,
+          originY
         );
         const thickness = ann.strokeWidth || 2.5;
         pdfPage.drawLine({
@@ -351,14 +429,18 @@ async function bakePageAnnotations(
             ann.points[i].y,
             unrotatedW,
             unrotatedH,
-            totalRotation
+            totalRotation,
+            originX,
+            originY
           );
           const pB = displayNormToPdfPoint(
             ann.points[i + 1].x,
             ann.points[i + 1].y,
             unrotatedW,
             unrotatedH,
-            totalRotation
+            totalRotation,
+            originX,
+            originY
           );
           pdfPage.drawLine({
             start: pA,
@@ -383,7 +465,9 @@ async function bakePageAnnotations(
           rendered.rectNorm,
           unrotatedW,
           unrotatedH,
-          totalRotation
+          totalRotation,
+          originX,
+          originY
         );
         pdfPage.drawImage(pngImage, {
           x: box.x,
@@ -396,9 +480,269 @@ async function bakePageAnnotations(
   }
 }
 
+function copyDocumentInfo(from: PDFDocument, to: PDFDocument): void {
+  const title = from.getTitle();
+  const author = from.getAuthor();
+  const subject = from.getSubject();
+  const keywords = from.getKeywords();
+  const creator = from.getCreator();
+  const creationDate = from.getCreationDate();
+  if (title) to.setTitle(title);
+  if (author) to.setAuthor(author);
+  if (subject) to.setSubject(subject);
+  if (keywords) to.setKeywords([keywords]);
+  if (creator) to.setCreator(creator);
+  if (creationDate) to.setCreationDate(creationDate);
+}
+
 /**
- * Build a PDF document from the current VirtualPage list (or a subset of 1-based display page numbers),
- * applying page deletions, rotations, and baking annotations.
+ * Save the whole working document by editing the source in place, so that bookmarks, form
+ * fields and document properties survive. Deleted pages are also purged from the output file.
+ */
+export async function buildEditedDocument(
+  sourcePdfBytes: Uint8Array,
+  virtualPages: VirtualPage[],
+  annotationsByPageId: Record<string, PdfAnnotation[]>,
+  includeAnnotations = true
+): Promise<Uint8Array> {
+  if (virtualPages.length === 0) {
+    throw new Error("出力対象のページが1ページもありません。");
+  }
+  const usedSources = new Set(virtualPages.map((vp) => vp.sourcePageIndex));
+  if (usedSources.size !== virtualPages.length) {
+    // A page object cannot appear twice in the page tree.
+    return buildPdfFromVirtualPages(
+      sourcePdfBytes,
+      virtualPages,
+      annotationsByPageId,
+      includeAnnotations
+    );
+  }
+
+  const doc = await loadEditablePdf(sourcePdfBytes);
+  const sourcePages = doc.getPages();
+
+  for (const vp of virtualPages) {
+    const page = sourcePages[vp.sourcePageIndex];
+    const totalRot = ((vp.baseRotation + vp.addedRotation) % 360 + 360) % 360;
+    page.setRotation(degrees(totalRot));
+    if (includeAnnotations) {
+      await bakePageAnnotations(doc, page, vp, annotationsByPageId[vp.id] ?? []);
+    }
+  }
+
+  const deletedPages = sourcePages.filter((_, idx) => !usedSources.has(idx));
+  const current = [...sourcePages];
+  // Pages are reordered before the deleted ones leave, so the tree never becomes empty.
+  virtualPages.forEach((vp, targetIdx) => {
+    const page = sourcePages[vp.sourcePageIndex];
+    const idx = current.indexOf(page);
+    if (idx !== targetIdx) {
+      doc.removePage(idx);
+      doc.insertPage(targetIdx, page);
+      current.splice(idx, 1);
+      current.splice(targetIdx, 0, page);
+    }
+  });
+  for (const page of deletedPages) {
+    const idx = current.indexOf(page);
+    doc.removePage(idx);
+    current.splice(idx, 1);
+  }
+
+  if (deletedPages.length > 0) {
+    purgeDeletedPages(doc, deletedPages);
+  }
+  return doc.save();
+}
+
+function asDict(doc: PDFDocument, obj: PDFObject | undefined): PDFDict | undefined {
+  const resolved = obj instanceof PDFRef ? doc.context.lookup(obj) : obj;
+  if (resolved instanceof PDFDict) return resolved;
+  if (resolved instanceof PDFStream) return resolved.dict;
+  return undefined;
+}
+
+function asArray(doc: PDFDocument, obj: PDFObject | undefined): PDFArray | undefined {
+  const resolved = obj instanceof PDFRef ? doc.context.lookup(obj) : obj;
+  return resolved instanceof PDFArray ? resolved : undefined;
+}
+
+/**
+ * pdf-lib writes every indirect object it knows, so a page merely removed from the page tree
+ * would stay readable inside the saved file. Remove the page, everything pointing at it,
+ * and whatever becomes unreachable as a result.
+ */
+function purgeDeletedPages(doc: PDFDocument, deletedPages: PDFPage[]): void {
+  const deletedPageRefs = new Set<PDFRef>(deletedPages.map((p) => p.ref));
+  const deletedWidgets = new Set<PDFObject>();
+  for (const page of deletedPages) {
+    const annots = asArray(doc, page.node.get(PDFName.of("Annots")));
+    annots?.asArray().forEach((a) => deletedWidgets.add(a));
+  }
+
+  pruneFormFields(doc, deletedWidgets);
+  pruneOutline(doc, deletedPageRefs);
+
+  // The structure tree holds per-page content references and alternate text of deleted pages.
+  doc.catalog.delete(PDFName.of("StructTreeRoot"));
+  doc.catalog.delete(PDFName.of("MarkInfo"));
+
+  for (const ref of deletedPageRefs) {
+    doc.context.delete(ref);
+  }
+  for (const [, obj] of doc.context.enumerateIndirectObjects()) {
+    nullifyReferences(obj, deletedPageRefs, new Set());
+  }
+  collectUnreachableObjects(doc);
+}
+
+function pruneFormFields(doc: PDFDocument, deletedWidgets: Set<PDFObject>): void {
+  const acroForm = asDict(doc, doc.catalog.get(PDFName.of("AcroForm")));
+  const fields = asArray(doc, acroForm?.get(PDFName.of("Fields")));
+  if (!fields) return;
+
+  const visited = new Set<PDFObject>();
+  const prune = (list: PDFArray) => {
+    for (let i = list.size() - 1; i >= 0; i--) {
+      const entry = list.get(i);
+      if (deletedWidgets.has(entry)) {
+        list.remove(i);
+        continue;
+      }
+      if (visited.has(entry)) continue;
+      visited.add(entry);
+      const kids = asArray(doc, asDict(doc, entry)?.get(PDFName.of("Kids")));
+      if (kids) {
+        prune(kids);
+        if (kids.size() === 0) list.remove(i);
+      }
+    }
+  };
+  prune(fields);
+}
+
+function outlineTargetsDeletedPage(
+  doc: PDFDocument,
+  item: PDFDict,
+  deletedPageRefs: Set<PDFRef>
+): boolean {
+  let dest = item.get(PDFName.of("Dest"));
+  if (!dest) {
+    dest = asDict(doc, item.get(PDFName.of("A")))?.get(PDFName.of("D"));
+  }
+  const first = asArray(doc, dest)?.get(0);
+  return first instanceof PDFRef && deletedPageRefs.has(first);
+}
+
+/** Removes bookmarks of deleted pages. A bookmark that still has live children stays as a heading. */
+function pruneOutline(doc: PDFDocument, deletedPageRefs: Set<PDFRef>): void {
+  const NEXT = PDFName.of("Next");
+  const PREV = PDFName.of("Prev");
+  const FIRST = PDFName.of("First");
+  const LAST = PDFName.of("Last");
+  const COUNT = PDFName.of("Count");
+  const visited = new Set<PDFObject>();
+
+  /** Returns how many bookmarks remain below `parent`. */
+  const pruneChildren = (parent: PDFDict): number => {
+    const kept: PDFRef[] = [];
+    let descendants = 0;
+    let cursor = parent.get(FIRST);
+    while (cursor instanceof PDFRef && !visited.has(cursor)) {
+      visited.add(cursor);
+      const item = asDict(doc, cursor);
+      if (!item) break;
+      const below = pruneChildren(item);
+      const dead = outlineTargetsDeletedPage(doc, item, deletedPageRefs);
+      if (dead && below > 0) {
+        item.delete(PDFName.of("Dest"));
+        item.delete(PDFName.of("A"));
+      }
+      if (!dead || below > 0) {
+        kept.push(cursor);
+        descendants += 1 + below;
+      }
+      cursor = item.get(NEXT);
+    }
+
+    kept.forEach((ref, i) => {
+      const item = asDict(doc, ref)!;
+      if (i > 0) item.set(PREV, kept[i - 1]);
+      else item.delete(PREV);
+      if (i < kept.length - 1) item.set(NEXT, kept[i + 1]);
+      else item.delete(NEXT);
+    });
+    if (kept.length > 0) {
+      parent.set(FIRST, kept[0]);
+      parent.set(LAST, kept[kept.length - 1]);
+    } else {
+      parent.delete(FIRST);
+      parent.delete(LAST);
+    }
+    const previousCount = parent.lookupMaybe(COUNT, PDFNumber)?.asNumber();
+    if (previousCount !== undefined) {
+      parent.set(COUNT, PDFNumber.of(previousCount < 0 ? -descendants : descendants));
+    }
+    return descendants;
+  };
+
+  const root = asDict(doc, doc.catalog.get(PDFName.of("Outlines")));
+  if (root && pruneChildren(root) === 0) {
+    doc.catalog.delete(PDFName.of("Outlines"));
+  }
+}
+
+function nullifyReferences(
+  obj: PDFObject | undefined,
+  targets: Set<PDFRef>,
+  seen: Set<PDFObject>
+): void {
+  if (!obj || seen.has(obj)) return;
+  seen.add(obj);
+  if (obj instanceof PDFStream) {
+    nullifyReferences(obj.dict, targets, seen);
+  } else if (obj instanceof PDFDict) {
+    for (const [key, value] of obj.entries()) {
+      if (value instanceof PDFRef && targets.has(value)) obj.set(key, PDFNull);
+      else nullifyReferences(value, targets, seen);
+    }
+  } else if (obj instanceof PDFArray) {
+    obj.asArray().forEach((value, i) => {
+      if (value instanceof PDFRef && targets.has(value)) obj.set(i, PDFNull);
+      else nullifyReferences(value, targets, seen);
+    });
+  }
+}
+
+function collectUnreachableObjects(doc: PDFDocument): void {
+  const context = doc.context;
+  const reachable = new Set<PDFRef>();
+  const walk = (obj: PDFObject | undefined) => {
+    if (!obj) return;
+    if (obj instanceof PDFRef) {
+      if (reachable.has(obj)) return;
+      reachable.add(obj);
+      walk(context.lookup(obj));
+    } else if (obj instanceof PDFStream) {
+      walk(obj.dict);
+    } else if (obj instanceof PDFDict) {
+      for (const [, value] of obj.entries()) walk(value);
+    } else if (obj instanceof PDFArray) {
+      obj.asArray().forEach(walk);
+    }
+  };
+  walk(context.trailerInfo.Root);
+  walk(context.trailerInfo.Info);
+  for (const [ref] of context.enumerateIndirectObjects()) {
+    if (!reachable.has(ref)) context.delete(ref);
+  }
+}
+
+/**
+ * Build a new PDF from a subset of pages (extract, split, merge input), applying rotations and
+ * baking annotations. Document properties are kept; document-wide structures such as bookmarks
+ * and form definitions are not. Use buildEditedDocument to save the whole document.
  */
 export async function buildPdfFromVirtualPages(
   sourcePdfBytes: Uint8Array,
@@ -406,14 +750,13 @@ export async function buildPdfFromVirtualPages(
   annotationsByPageId: Record<string, PdfAnnotation[]>,
   includeAnnotations = true
 ): Promise<Uint8Array> {
-  const srcDoc = await PDFDocument.load(sourcePdfBytes, {
-    ignoreEncryption: true,
-  });
-  const outDoc = await PDFDocument.create();
-
   if (virtualPages.length === 0) {
     throw new Error("出力対象のページが1ページもありません。");
   }
+
+  const srcDoc = await loadEditablePdf(sourcePdfBytes);
+  const outDoc = await PDFDocument.create();
+  copyDocumentInfo(srcDoc, outDoc);
 
   const indicesToCopy = virtualPages.map((vp) => vp.sourcePageIndex);
   const copiedPages = await outDoc.copyPages(srcDoc, indicesToCopy);
@@ -488,7 +831,7 @@ export async function mergePdfQueue(items: MergeQueueItem[]): Promise<Uint8Array
   for (let idx = 0; idx < items.length; idx++) {
     const item = items[idx];
     const bytes = base64ToUint8Array(item.base64Data);
-    const srcDoc = await PDFDocument.load(bytes, { ignoreEncryption: true });
+    const srcDoc = await loadEditablePdf(bytes);
     const pageCount = srcDoc.getPageCount();
 
     const specStr = item.pageSpec.trim() || "all";
@@ -526,6 +869,6 @@ export async function mergePdfQueue(items: MergeQueueItem[]): Promise<Uint8Array
  */
 export async function getPdfPageCountFromBase64(base64Data: string): Promise<number> {
   const bytes = base64ToUint8Array(base64Data);
-  const doc = await PDFDocument.load(bytes, { ignoreEncryption: true });
+  const doc = await loadEditablePdf(bytes);
   return doc.getPageCount();
 }

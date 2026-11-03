@@ -37,6 +37,7 @@
     onRotatePage: (pageNum: number, delta: number) => void;
     onDeletePage: (pageNum: number) => void;
     onAddAnnotation: (ann: Omit<PdfAnnotation, "id" | "createdAt">) => void;
+    onBeforeAnnotationChange: () => void;
     onUpdateAnnotation: (id: string, patch: Partial<PdfAnnotation>) => void;
     onDeleteAnnotation: (id: string) => void;
     onSelectAnnotation: (id: string | null) => void;
@@ -62,6 +63,7 @@
     onRotatePage,
     onDeletePage,
     onAddAnnotation,
+    onBeforeAnnotationChange,
     onUpdateAnnotation,
     onDeleteAnnotation,
     onSelectAnnotation,
@@ -90,6 +92,7 @@
   let dragStartPoint = $state<NormalizedPoint | null>(null);
   let dragOrigRects = $state<NormalizedRect[]>([]);
   let dragOrigPoints = $state<NormalizedPoint[]>([]);
+  let dragUndoRecorded = false;
 
   // Inline text/sticky creation or editing
   let editingAnnId = $state<string | null>(null);
@@ -301,6 +304,11 @@
       const dx = cur.x - dragStartPoint.x;
       const dy = cur.y - dragStartPoint.y;
 
+      if (!dragUndoRecorded && (dx !== 0 || dy !== 0)) {
+        dragUndoRecorded = true;
+        onBeforeAnnotationChange();
+      }
+
       if (dragOrigRects.length > 0) {
         const updatedRects = dragOrigRects.map((r) => ({
           x: Math.max(0, Math.min(1 - r.w, r.x + dx)),
@@ -505,6 +513,7 @@
 
     draggingAnnId = ann.id;
     dragStartPoint = getNormalizedCoords(e);
+    dragUndoRecorded = false;
     dragOrigRects = ann.rects.map((r) => ({ ...r }));
     dragOrigPoints = ann.points.map((p) => ({ ...p }));
   }
@@ -518,7 +527,11 @@
   function commitInlineEdit(annId: string) {
     const trimmed = editingTextValue.trim();
     if (trimmed) {
-      onUpdateAnnotation(annId, { text: trimmed });
+      const current = annotations.find((a) => a.id === annId);
+      if (current?.text !== trimmed) {
+        onBeforeAnnotationChange();
+        onUpdateAnnotation(annId, { text: trimmed });
+      }
     } else {
       onDeleteAnnotation(annId);
     }

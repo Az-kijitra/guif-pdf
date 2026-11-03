@@ -1,5 +1,8 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { rotateAnnotationWithPage } from "$lib/annotationRotation";
+  import { resolveKeyCommand } from "$lib/keyCommands";
   import {
     base64ToUint8Array,
     formatBytes,
@@ -29,6 +32,8 @@
   import TopToolbar from "$lib/components/TopToolbar.svelte";
   import { formatPageSet, parsePageSpec } from "$lib/pageRangeParser";
   import {
+    ENCRYPTED_PDF_MESSAGE,
+    buildEditedDocument,
     buildPdfFromVirtualPages,
     buildSplitPdfFiles,
     getPdfPageCountFromBase64,
@@ -58,6 +63,8 @@
   let activeFileName = $state("");
   let activeFileSize = $state(0);
   let isModified = $state(false);
+  // Encrypted PDFs can be viewed, but pdf-lib cannot write them back.
+  let isReadOnly = $state(false);
 
   // Virtual Pages & Annotations state
   let virtualPages = $state<VirtualPage[]>([]);
@@ -120,6 +127,7 @@
   let mergeSuggestedPath = $state("");
   let overwriteConfirmOpen = $state(false);
   let helpModalOpen = $state(false);
+  let discardConfirm = $state<{ message: string; proceed: () => void } | null>(null);
   let isBusy = $state(false);
 
   // Theme & Status Notification
@@ -130,6 +138,38 @@
   function notify(msg: string, kind: "info" | "success" | "error" = "info") {
     statusMessage = msg;
     statusKind = kind;
+  }
+
+  const anyModalOpen = $derived(
+    saveExtractModalMode !== null ||
+      splitModalOpen ||
+      mergeModalOpen ||
+      overwriteConfirmOpen ||
+      helpModalOpen ||
+      discardConfirm !== null
+  );
+
+  /** True (and tells the user why) when the open PDF cannot be edited. */
+  function blockIfReadOnly(): boolean {
+    if (isReadOnly) {
+      notify(ENCRYPTED_PDF_MESSAGE, "error");
+    }
+    return isReadOnly;
+  }
+
+  function confirmDiscardIfModified(message: string, proceed: () => void) {
+    if (isModified) {
+      discardConfirm = { message, proceed };
+    } else {
+      proceed();
+    }
+  }
+
+  function requestOpenPdf(filePath: string) {
+    confirmDiscardIfModified(
+      "未保存の編集内容があります。保存せずに別のPDFを開きますか？",
+      () => void openPdfFromDisk(filePath)
+    );
   }
 
   const baseFileStem = $derived.by(() => {
@@ -158,6 +198,15 @@
       import.meta.url
     ).toString();
     pdfjsLib = pdfjs;
+
+    void getCurrentWindow().onCloseRequested((event) => {
+      if (!isModified) return;
+      event.preventDefault();
+      discardConfirm = {
+        message: "未保存の編集内容があります。保存せずに終了しますか？",
+        proceed: () => void getCurrentWindow().destroy(),
+      };
+    });
 
     // 2. Load Theme (guif config.toml aligned)
     try {
@@ -247,8 +296,18 @@
         `「${payload.file_name}」を開きました（全 ${virtualPages.length} ページ）`,
         "success"
       );
+      if (isReadOnly) {
+        notify(
+          `「${payload.file_name}」を閲覧のみで開きました。${ENCRYPTED_PDF_MESSAGE}`,
+          "info"
+        );
+      }
     } catch (e) {
-      notify(`PDFを開けませんでした: ${e}`, "error");
+      if ((e as { name?: string })?.name === "PasswordException") {
+        notify("パスワードが必要なPDFは開けません。", "error");
+      } else {
+        notify(`PDFを開けませんでした: ${e}`, "error");
+      }
     } finally {
       isBusy = false;
     }
@@ -270,8 +329,11 @@
       cMapPacked: true,
       standardFontDataUrl: "/pdfjs/standard_fonts/",
       useSystemFonts: true,
+      isEvalSupported: false,
     });
     const doc = await loadingTask.promise;
+    const metadata = await doc.getMetadata();
+    const encrypted = Boolean((metadata.info as { EncryptFilterName?: string }).EncryptFilterName);
 
     const pages: VirtualPage[] = [];
     for (let i = 1; i <= doc.numPages; i++) {
@@ -289,6 +351,7 @@
     }
 
     sourcePdfBytes = bytesForPdfLib;
+    isReadOnly = encrypted;
     pdfDoc = doc;
     activeFilePath = filePath;
     activeFileName = fileName;
@@ -575,29 +638,39 @@
   // ----------------------------------------------------
   // Page Manipulation Operations (Rotate, Reorder, Delete)
   // ----------------------------------------------------
+  function rotatePages(targets: Set<number>, delta: number) {
+    const nextAnnotations = { ...annotationsByPageId };
+    virtualPages = virtualPages.map((vp, idx) => {
+      if (!targets.has(idx + 1)) return vp;
+      const rot = (((vp.baseRotation + vp.addedRotation) % 360) + 360) % 360;
+      const swapped = rot === 90 || rot === 270;
+      const displayW = swapped ? vp.heightPt : vp.widthPt;
+      const displayH = swapped ? vp.widthPt : vp.heightPt;
+      const anns = nextAnnotations[vp.id];
+      if (anns) {
+        nextAnnotations[vp.id] = anns.map((a) =>
+          rotateAnnotationWithPage(a, delta, displayW, displayH)
+        );
+      }
+      return { ...vp, addedRotation: (((vp.addedRotation + delta) % 360) + 360) % 360 };
+    });
+    annotationsByPageId = nextAnnotations;
+  }
+
   function handleRotateSinglePage(pageNum: number, delta: number) {
     const idx = pageNum - 1;
-    if (idx < 0 || idx >= virtualPages.length) return;
+    if (idx < 0 || idx >= virtualPages.length || blockIfReadOnly()) return;
     pushUndoSnapshot();
-    virtualPages = virtualPages.map((vp, i) =>
-      i === idx
-        ? { ...vp, addedRotation: (((vp.addedRotation + delta) % 360) + 360) % 360 }
-        : vp
-    );
+    rotatePages(new Set([pageNum]), delta);
     notify(`ページ ${pageNum} を ${delta > 0 ? `+${delta}` : delta}° 回転しました`, "info");
   }
 
   function handleRotateSelectedOrCurrent(delta: number) {
-    if (virtualPages.length === 0) return;
+    if (virtualPages.length === 0 || blockIfReadOnly()) return;
     const targets =
       selectedPagesList.length > 0 ? selectedPagesList : [currentPage];
-    const targetSet = new Set(targets);
     pushUndoSnapshot();
-    virtualPages = virtualPages.map((vp, idx) =>
-      targetSet.has(idx + 1)
-        ? { ...vp, addedRotation: (((vp.addedRotation + delta) % 360) + 360) % 360 }
-        : vp
-    );
+    rotatePages(new Set(targets), delta);
     notify(
       `${targets.length} ページを ${delta > 0 ? `+${delta}` : delta}° 回転しました`,
       "info"
@@ -611,7 +684,8 @@
       idx < 0 ||
       idx >= virtualPages.length ||
       targetIdx < 0 ||
-      targetIdx >= virtualPages.length
+      targetIdx >= virtualPages.length ||
+      blockIfReadOnly()
     ) {
       return;
     }
@@ -625,6 +699,7 @@
   }
 
   function handleDeleteSinglePage(pageNum: number) {
+    if (blockIfReadOnly()) return;
     if (virtualPages.length <= 1) {
       notify("最後の1ページは削除できません。", "error");
       return;
@@ -639,7 +714,7 @@
   }
 
   function handleDeleteSelectedPages() {
-    if (virtualPages.length === 0) return;
+    if (virtualPages.length === 0 || blockIfReadOnly()) return;
     const targets =
       selectedPagesList.length > 0 ? selectedPagesList : [currentPage];
     if (targets.length >= virtualPages.length) {
@@ -668,6 +743,7 @@
   // Annotations Management
   // ----------------------------------------------------
   function handleAddAnnotation(ann: Omit<PdfAnnotation, "id" | "createdAt">) {
+    if (blockIfReadOnly()) return;
     pushUndoSnapshot();
     const newAnn: PdfAnnotation = {
       ...ann,
@@ -721,7 +797,7 @@
   // Save, Extract, Split, and Merge Execution
   // ----------------------------------------------------
   async function openSaveOrExtractModal(mode: "save" | "extract") {
-    if (!sourcePdfBytes || virtualPages.length === 0) return;
+    if (!sourcePdfBytes || virtualPages.length === 0 || blockIfReadOnly()) return;
     const suffix = mode === "save" ? "_edited" : "_extracted";
     try {
       modalSuggestedPath = await suggestSavePath(
@@ -750,7 +826,11 @@
         if (vp) targetVirtualPages.push(vp);
       }
 
-      const outBytes = await buildPdfFromVirtualPages(
+      const savesWholeDocument =
+        new Set(targetVirtualPages).size === virtualPages.length &&
+        targetVirtualPages.length === virtualPages.length;
+      const build = savesWholeDocument ? buildEditedDocument : buildPdfFromVirtualPages;
+      const outBytes = await build(
         sourcePdfBytes,
         targetVirtualPages,
         annotationsByPageId,
@@ -767,7 +847,7 @@
       if (currentDir) {
         await navigateFolder(currentDir);
       }
-      if (opts.pageNumbers.length === virtualPages.length) {
+      if (savesWholeDocument && opts.includeAnnotations) {
         isModified = false;
       }
       notify(
@@ -776,7 +856,7 @@
       );
 
       if (opts.openAfterSave) {
-        await openPdfFromDisk(res.saved_path);
+        requestOpenPdf(res.saved_path);
       }
     } catch (e) {
       notify(`保存エラー: ${e}`, "error");
@@ -829,10 +909,10 @@
   }
 
   async function executeOverwriteOriginal() {
-    if (!sourcePdfBytes || !activeFilePath) return;
+    if (!sourcePdfBytes || !activeFilePath || blockIfReadOnly()) return;
     isBusy = true;
     try {
-      const outBytes = await buildPdfFromVirtualPages(
+      const outBytes = await buildEditedDocument(
         sourcePdfBytes,
         virtualPages,
         annotationsByPageId,
@@ -889,8 +969,12 @@
     }
   }
 
+  function openSplitModal() {
+    if (!blockIfReadOnly()) splitModalOpen = true;
+  }
+
   async function openMergeDialog() {
-    if (mergeQueue.length === 0 && sourcePdfBytes && activeFilePath) {
+    if (mergeQueue.length === 0 && sourcePdfBytes && activeFilePath && !isReadOnly) {
       try {
         const currentEditedBytes = await buildPdfFromVirtualPages(
           sourcePdfBytes,
@@ -967,12 +1051,13 @@
         opts.allowOverwrite
       );
       mergeModalOpen = false;
+      mergeQueue = [];
       if (currentDir) {
         await navigateFolder(currentDir);
       }
       notify(`PDF結合完了: ${res.saved_path} (${formatBytes(res.size_bytes)})`, "success");
       if (opts.openAfterMerge) {
-        await openPdfFromDisk(res.saved_path);
+        requestOpenPdf(res.saved_path);
       }
     } catch (e) {
       notify(`PDF結合エラー: ${e}`, "error");
@@ -997,154 +1082,131 @@
   // ----------------------------------------------------
   // Global Keyboard Navigation (guif / tuif style)
   // ----------------------------------------------------
+  function closeTopModal() {
+    if (discardConfirm) discardConfirm = null;
+    else if (overwriteConfirmOpen) overwriteConfirmOpen = false;
+    else if (helpModalOpen) helpModalOpen = false;
+    else if (isBusy) return;
+    else if (saveExtractModalMode) saveExtractModalMode = null;
+    else if (splitModalOpen) splitModalOpen = false;
+    else if (mergeModalOpen) mergeModalOpen = false;
+  }
+
   function handleGlobalKeyDown(e: KeyboardEvent) {
     const tag = (e.target as HTMLElement)?.tagName;
-    const isInputFocused =
+    const inputFocused =
       tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+    const command = resolveKeyCommand(e, {
+      inputFocused,
+      modalOpen: anyModalOpen,
+    });
 
-    if (e.key === "F2") {
-      e.preventDefault();
-      pageBarOpen = !pageBarOpen;
-      return;
-    }
-
-    if (e.key === "F3") {
-      e.preventDefault();
-      annotationBarOpen = !annotationBarOpen;
-      return;
-    }
-
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
-      e.preventDefault();
-      if (e.shiftKey) {
-        if (activeFilePath && sourcePdfBytes) overwriteConfirmOpen = true;
-      } else {
-        void openSaveOrExtractModal("save");
-      }
-      return;
-    }
-
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
-      e.preventDefault();
-      searchOpen = !searchOpen;
-      return;
-    }
-
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "b") {
-      e.preventDefault();
-      sidebarOpen = !sidebarOpen;
-      return;
-    }
-
-    if (!isInputFocused && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
-      e.preventDefault();
-      if (e.shiftKey) handleRedo();
-      else handleUndo();
-      return;
-    }
-
-    if (!isInputFocused && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") {
-      e.preventDefault();
-      handleRedo();
-      return;
-    }
-
-    if (isInputFocused) return;
-
-    if (e.key === "Delete" || e.key === "Backspace") {
-      if (selectedAnnotationId) {
-        e.preventDefault();
-        for (const [pageId, anns] of Object.entries(annotationsByPageId)) {
-          if (anns.some((a) => a.id === selectedAnnotationId)) {
-            handleDeleteAnnotation(pageId, selectedAnnotationId);
-            break;
+    switch (command) {
+      case null:
+        return;
+      case "tool-select":
+        toolMode = "select";
+        return;
+      case "tool-highlight":
+        toolMode = "highlight";
+        return;
+      case "tool-text":
+        toolMode = "text";
+        return;
+      case "tool-sticky":
+        toolMode = "sticky";
+        return;
+      case "tool-rect":
+        toolMode = "rect";
+        return;
+      case "tool-arrow":
+        toolMode = "arrow";
+        return;
+      case "tool-line":
+        toolMode = "line";
+        return;
+      case "tool-pen":
+        toolMode = "pen";
+        return;
+      case "fit-width":
+        handleFitWidth();
+        return;
+      case "fit-page":
+        handleFitPage();
+        return;
+      case "toggle-help":
+        helpModalOpen = !helpModalOpen;
+        return;
+      case "close-modal":
+        closeTopModal();
+        return;
+      case "escape":
+        selectedAnnotationId = null;
+        toolMode = "select";
+        return;
+      case "delete-annotation":
+        if (selectedAnnotationId) {
+          e.preventDefault();
+          for (const [pageId, anns] of Object.entries(annotationsByPageId)) {
+            if (anns.some((a) => a.id === selectedAnnotationId)) {
+              handleDeleteAnnotation(pageId, selectedAnnotationId);
+              break;
+            }
           }
         }
         return;
-      }
     }
 
-    switch (e.key) {
-      case "j":
-      case "J":
-      case "PageDown":
-        e.preventDefault();
+    e.preventDefault();
+    switch (command) {
+      case "toggle-page-bar":
+        pageBarOpen = !pageBarOpen;
+        break;
+      case "toggle-annotation-bar":
+        annotationBarOpen = !annotationBarOpen;
+        break;
+      case "save-overwrite":
+        if (activeFilePath && sourcePdfBytes && !blockIfReadOnly()) {
+          overwriteConfirmOpen = true;
+        }
+        break;
+      case "save-as":
+        void openSaveOrExtractModal("save");
+        break;
+      case "toggle-search":
+        searchOpen = !searchOpen;
+        break;
+      case "toggle-sidebar":
+        sidebarOpen = !sidebarOpen;
+        break;
+      case "undo":
+        handleUndo();
+        break;
+      case "redo":
+        handleRedo();
+        break;
+      case "next-page":
         goToPage(currentPage + 1);
         break;
-      case "k":
-      case "K":
-      case "PageUp":
-        e.preventDefault();
+      case "prev-page":
         goToPage(currentPage - 1);
         break;
-      case "Home":
-        e.preventDefault();
+      case "first-page":
         goToPage(1);
         break;
-      case "End":
-        e.preventDefault();
+      case "last-page":
         goToPage(virtualPages.length);
         break;
-      case " ":
-        e.preventDefault();
+      case "toggle-page-select":
         if (virtualPages.length > 0) {
           handleToggleSelectPage(currentPage, e.shiftKey);
         }
         break;
-      case "r":
-        e.preventDefault();
+      case "rotate-right":
         handleRotateSelectedOrCurrent(90);
         break;
-      case "R":
-        e.preventDefault();
+      case "rotate-left":
         handleRotateSelectedOrCurrent(-90);
-        break;
-      case "v":
-      case "V":
-        toolMode = "select";
-        break;
-      case "h":
-      case "H":
-        toolMode = "highlight";
-        break;
-      case "t":
-      case "T":
-        toolMode = "text";
-        break;
-      case "n":
-      case "N":
-        toolMode = "sticky";
-        break;
-      case "b":
-      case "B":
-        toolMode = "rect";
-        break;
-      case "a":
-      case "A":
-        toolMode = "arrow";
-        break;
-      case "l":
-      case "L":
-        toolMode = "line";
-        break;
-      case "p":
-      case "P":
-        toolMode = "pen";
-        break;
-      case "w":
-      case "W":
-        handleFitWidth();
-        break;
-      case "f":
-      case "F":
-        handleFitPage();
-        break;
-      case "?":
-        helpModalOpen = !helpModalOpen;
-        break;
-      case "Escape":
-        selectedAnnotationId = null;
-        toolMode = "select";
         break;
     }
   }
@@ -1186,9 +1248,11 @@
     onUndo={handleUndo}
     onRedo={handleRedo}
     onSaveAs={() => openSaveOrExtractModal("save")}
-    onSaveOverwrite={() => (overwriteConfirmOpen = true)}
+    onSaveOverwrite={() => {
+      if (!blockIfReadOnly()) overwriteConfirmOpen = true;
+    }}
     onOpenExtractModal={() => openSaveOrExtractModal("extract")}
-    onOpenSplitModal={() => (splitModalOpen = true)}
+    onOpenSplitModal={openSplitModal}
     onOpenMergeModal={openMergeDialog}
     onRotateSelectedOrCurrent={handleRotateSelectedOrCurrent}
     onDeleteSelectedPages={handleDeleteSelectedPages}
@@ -1246,7 +1310,7 @@
       onRotateSelectedOrCurrent={handleRotateSelectedOrCurrent}
       onDeleteSelectedPages={handleDeleteSelectedPages}
       onOpenExtractModal={() => openSaveOrExtractModal("extract")}
-      onOpenSplitModal={() => (splitModalOpen = true)}
+      onOpenSplitModal={openSplitModal}
       onOpenMergeModal={openMergeDialog}
       onClosePageBar={() => (pageBarOpen = false)}
     />
@@ -1281,7 +1345,7 @@
         onDeleteAnnotation={handleDeleteAnnotation}
         onClearAllAnnotations={handleClearAllAnnotations}
         onNavigateFolder={navigateFolder}
-        onOpenPdfFile={openPdfFromDisk}
+        onOpenPdfFile={requestOpenPdf}
         onQuickAddMergePdf={addFileToMergeQueue}
       />
     {/if}
@@ -1315,6 +1379,7 @@
               onRotatePage={handleRotateSinglePage}
               onDeletePage={handleDeleteSinglePage}
               onAddAnnotation={handleAddAnnotation}
+              onBeforeAnnotationChange={pushUndoSnapshot}
               onUpdateAnnotation={(annId, patch) =>
                 handleUpdateAnnotation(vp.id, annId, patch)}
               onDeleteAnnotation={(annId) => handleDeleteAnnotation(vp.id, annId)}
@@ -1346,6 +1411,7 @@
               onRotatePage={handleRotateSinglePage}
               onDeletePage={handleDeleteSinglePage}
               onAddAnnotation={handleAddAnnotation}
+              onBeforeAnnotationChange={pushUndoSnapshot}
               onUpdateAnnotation={(annId, patch) =>
                 handleUpdateAnnotation(singleVp.id, annId, patch)}
               onDeleteAnnotation={(annId) =>
@@ -1384,6 +1450,9 @@
       <span class="status-msg">{statusMessage}</span>
     </div>
     <div class="status-right">
+      {#if isReadOnly}
+        <span class="st-item" title={ENCRYPTED_PDF_MESSAGE}>閲覧のみ</span>
+      {/if}
       {#if activeFilePath}
         <span class="st-item" title={activeFilePath}>
           {activeFileName} ({formatBytes(activeFileSize)})
@@ -1505,6 +1574,34 @@
           onclick={executeOverwriteOriginal}
         >
           上書き保存を実行
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if discardConfirm}
+  {@const pending = discardConfirm}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="confirm-backdrop" onclick={() => (discardConfirm = null)}>
+    <div class="confirm-card" onclick={(e) => e.stopPropagation()}>
+      <h3>⚠ 未保存の編集内容</h3>
+      <p>{pending.message}</p>
+      <div class="confirm-btns">
+        <button type="button" class="c-cancel" onclick={() => (discardConfirm = null)}>
+          キャンセル
+        </button>
+        <button
+          type="button"
+          class="c-danger"
+          onclick={() => {
+            discardConfirm = null;
+            isModified = false;
+            pending.proceed();
+          }}
+        >
+          保存せずに続行
         </button>
       </div>
     </div>

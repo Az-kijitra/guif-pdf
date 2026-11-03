@@ -51,6 +51,30 @@ describe("pageRangeParser", () => {
     expect(res.error).toContain("25");
   });
 
+  it("reports page 0, huge ranges and unreadable input as errors", () => {
+    expect(parsePageSpec("0", 5).error).toContain("0");
+    expect(parsePageSpec("1-99999999", 5).error).toContain("99999999");
+    for (const spec of ["abc", "1;2", "1.5", "1 2", "-", "!"]) {
+      expect(parsePageSpec(spec, 5).error, spec).not.toBeNull();
+    }
+  });
+
+  it("treats empty input as selecting nothing", () => {
+    expect(parsePageSpec("", 5)).toMatchObject({ pages: [], orderedPages: [], error: null });
+  });
+
+  it("removes duplicates from pages but keeps them in orderedPages", () => {
+    const res = parsePageSpec("5, 5, 5", 5);
+    expect(res.pages).toEqual([5]);
+    expect(res.orderedPages).toEqual([5, 5, 5]);
+  });
+
+  it("combines keywords with exclusions and resolves end", () => {
+    expect(parsePageSpec("odd, !1", 5).pages).toEqual([3, 5]);
+    expect(parsePageSpec("end", 5).pages).toEqual([5]);
+    expect(parsePageSpec("!1-5", 5).pages).toEqual([]);
+  });
+
   it("formats page set into compact range string", () => {
     expect(formatPageSet([1, 2, 3, 5, 8, 9, 10])).toBe("1-3, 5, 8-10");
     expect(formatPageSet([])).toBe("");

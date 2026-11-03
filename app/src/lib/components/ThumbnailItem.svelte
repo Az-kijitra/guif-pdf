@@ -115,7 +115,6 @@
     <label
       class="thumb-check-label"
       title="選択 / Shift+クリックで範囲選択"
-      onclick={(e) => e.stopPropagation()}
     >
       <input
         type="checkbox"
