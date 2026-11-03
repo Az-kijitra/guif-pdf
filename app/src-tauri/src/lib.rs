@@ -263,8 +263,8 @@ fn list_pdf_folder(state: State<'_, AppState>, path: String) -> FolderListing {
         }
     }
 
-    dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-    files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    dirs.sort_by_key(|a| a.name.to_lowercase());
+    files.sort_by_key(|a| a.name.to_lowercase());
 
     let mut entries = dirs;
     entries.extend(files);
@@ -311,9 +311,7 @@ fn read_pdf_base64(state: State<'_, AppState>, path: String) -> Result<PdfFilePa
 }
 
 pub fn compute_suggested_save_path(original_path: &Path, suffix: &str) -> PathBuf {
-    let parent = original_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."));
+    let parent = original_path.parent().unwrap_or_else(|| Path::new("."));
     let stem = original_path
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())

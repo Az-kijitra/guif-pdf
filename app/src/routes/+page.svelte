@@ -80,7 +80,7 @@
   let layoutMode = $state<ViewLayoutMode>("continuous");
   let currentPage = $state(1);
   let zoomScale = $state(1.2);
-  let mainViewportEl: HTMLDivElement | undefined = $state();
+  let mainViewportEl: HTMLElement | undefined = $state();
   let isProgrammaticScroll = false;
 
   // Dual Page Selection (Visual Checkboxes <-> Page Number Spec Input)
