@@ -165,6 +165,13 @@
     }
   }
 
+  function proceedDiscardingEdits() {
+    const proceed = discardConfirm?.proceed;
+    discardConfirm = null;
+    isModified = false;
+    proceed?.();
+  }
+
   function requestOpenPdf(filePath: string) {
     confirmDiscardIfModified(
       "未保存の編集内容があります。保存せずに別のPDFを開きますか？",
@@ -1581,13 +1588,12 @@
 {/if}
 
 {#if discardConfirm}
-  {@const pending = discardConfirm}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="confirm-backdrop" onclick={() => (discardConfirm = null)}>
     <div class="confirm-card" onclick={(e) => e.stopPropagation()}>
       <h3>⚠ 未保存の編集内容</h3>
-      <p>{pending.message}</p>
+      <p>{discardConfirm.message}</p>
       <div class="confirm-btns">
         <button type="button" class="c-cancel" onclick={() => (discardConfirm = null)}>
           キャンセル
@@ -1595,11 +1601,7 @@
         <button
           type="button"
           class="c-danger"
-          onclick={() => {
-            discardConfirm = null;
-            isModified = false;
-            pending.proceed();
-          }}
+          onclick={proceedDiscardingEdits}
         >
           保存せずに続行
         </button>

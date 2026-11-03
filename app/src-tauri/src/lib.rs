@@ -722,6 +722,10 @@ fn save_theme_setting(
 
 pub fn run() {
     let settings_path = get_settings_path();
+    #[cfg(debug_assertions)]
+    if let Some(scope) = dir_override_or_exit(E2E_FS_SCOPE_ENV) {
+        eprintln!("E2E fs scope active: {}", scope.display());
+    }
     let initial_settings = load_settings(&settings_path);
     let saved_theme = initial_settings
         .theme

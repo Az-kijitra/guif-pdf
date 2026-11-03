@@ -68,8 +68,8 @@ key = "Ctrl+Alt+P"`;
       <section class="help-sec">
         <h4>2. キーボードショートカット</h4>
         <div class="shortcut-grid">
-          <div><kbd>J</kbd> / <kbd>↓</kbd> / <kbd>PageDown</kbd> : 次のページ</div>
-          <div><kbd>K</kbd> / <kbd>↑</kbd> / <kbd>PageUp</kbd> : 前のページ</div>
+          <div><kbd>J</kbd> / <kbd>PageDown</kbd> : 次のページ</div>
+          <div><kbd>K</kbd> / <kbd>PageUp</kbd> : 前のページ</div>
           <div><kbd>Home</kbd> / <kbd>End</kbd> : 先頭 / 最終ページ</div>
           <div><kbd>Space</kbd> : 現在ページの選択チェック ON/OFF</div>
           <div><kbd>R</kbd> / <kbd>Shift+R</kbd> : 右90°回転 / 左90°回転</div>
@@ -86,7 +86,7 @@ key = "Ctrl+Alt+P"`;
       <section class="help-sec">
         <h4>3. <code>guif</code> の <code>config.toml</code> 連携設定例</h4>
         <p class="sec-note">
-          <code>guif</code> で <code>Ctrl+,</code> を押して <code>config.toml</code> を開き、以下を追加すると <code>Ctrl+Alt+P</code> や右クリックメニューから選択中のPDFまたはフォルダーを直接 <code>guif-pdf</code> で開けます。
+          <code>guif</code> で <code>Ctrl+,</code> を押して <code>config.toml</code> を開き、以下を追加すると <code>Ctrl+Alt+P</code> や右クリックメニューから選択中のPDFまたはフォルダーを直接 <code>guif-pdf</code> で開けます。<code>[[external_apps]]</code> を書くと <code>guif</code> の既定の4つは使われなくなるので、残したいときは一緒に書いてください（READMEに全体の例があります）。
         </p>
         <div class="code-wrap">
           <pre>{GUIF_CONFIG_SNIPPET}</pre>

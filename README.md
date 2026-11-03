@@ -1,60 +1,86 @@
-# guif-pdf — OSS PDF Viewer & Page / Annotation Editor
+# guif-pdf
 
-Windows 10 / 11 向け キーボード＆マウス対応の PDF 閲覧・注釈・ページ操作ツール（**Tauri 2 + Rust + Svelte 5 + PDF.js + pdf-lib**）。
+[![CI](https://github.com/Az-kijitra/guif-pdf/actions/workflows/ci.yml/badge.svg)](https://github.com/Az-kijitra/guif-pdf/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Adobe 製品やプロプライエタリ SDK に一切依存せず、100% オープンソース技術（Apache-2.0 / MIT）のみで構築されています。
-CUI ファイラー `tuif` および GUI ファイラー [`guif`](https://github.com/Az-kijitra/guif) と共通の配色テーマ設計（`config.toml` の `[theme]` 自動連携）を採用し、`guif` の外部アプリ起動機能から直接呼び出してシームレスに利用できます。
+`guif-pdf` は、Windows 10 / 11 向けの、キーボードとマウスで操作する PDF の閲覧・注釈・ページ編集ツールです（**Tauri 2 + Rust + Svelte 5 + PDF.js + pdf-lib** 製）。
 
----
+GUI ファイラー [`guif`](https://github.com/Az-kijitra/guif) の外部アプリ機能から起動して使うことを想定しており、配色も `guif` に合わせます。単体でも使えます。
 
-## 画面構成と基本方針
-
-- **閲覧を邪魔しないミニマルな上部設計**:
-  - 起動時の既定状態では、ウィンドウ上部は **1行のメニューバー (`ファイル(F)` / `編集(E)` / `表示(V)` / `ページ操作(P)` / `注釈(A)` / `ヘルプ(H)`)** のみが表示され、PDF の閲覧領域を最大限広く確保します。
-  - **「📄 ページ操作・番号指定バー (`F2`)」** と **「✎ 注釈ツールバー (`F3`)」** は標準で折りたたまれており、メニューバー右端のトグルボタン、メニュー項目、またはショートカットキー (`F2` / `F3`) から必要なときだけ展開できます。
-  - ツールバーを展開しなくても、すべての機能（保存、ページ抽出・分割・結合・回転・削除、注釈ツールの切替、表示モード変更など）を **メニューバー** または **ショートカットキー** から直接呼び出せます。
+![guif-pdf の画面](docs/images/main.png)
 
 ---
 
-## 主な機能
+## インストール
 
-1. **高速・高精細な PDF 閲覧**
-   - **PDF.js (`pdfjs-dist`)** による高 DPI レンダリングと `IntersectionObserver` による遅延描画（数百ページの大型 PDF でも軽快に動作）
-   - 3つの表示モード：**連続スクロール** / **単一ページ** / **一覧グリッド（サムネイル整理）**
-   - テキスト選択・コピー、全文インクリメンタル検索（`Ctrl+F`）、目次（しおり）ジャンプ、前回閲覧ページ・ズーム率の自動レジューム
-2. **注釈・ハイライト追記（日本語完全対応）**
-   - **ハイライト (`H`)**: PDF 上の文字をドラッグ選択してハイライト、または矩形範囲ドラッグで図表やスキャン PDF もハイライト可能
-   - **文字記入 (`T`)**: クリックした任意の位置に日本語・英数テキストを書き込み（白背景枠 ON/OFF、文字サイズ 11pt〜28pt 変更、ドラッグ移動・ダブルクリック再編集対応）
-   - **付箋メモ (`N`)**: ページ上にメモカード（NOTE）を配置
-   - **図形・フリーハンド描画**: 四角枠 (`B`)、矢印 (`A`)、直線 (`L`)、手書きペン (`P`)
-   - Undo (`Ctrl+Z`) / Redo (`Ctrl+Y`) 対応
-3. **閲覧しながらの GUI ページ選択 ＆ ページ番号指定（双方向同期）**
-   - ページ上部のチェックボックスやサムネイル一覧でのクリック／`Shift+クリック`範囲選択／`Space` キー選択と、ページ操作バー（`F2` で展開、または抽出・分割・結合ダイアログ内）の **「ページ指定」入力欄** がリアルタイムに双方向同期します
-   - 大量ページの確実な操作のため、以下のページ指定構文をサポート（全角数字や全角カンマ・ハイフンも自動正規化）：
-     - 単一・範囲指定: `1, 3, 5-12, 20-25`
-     - 末尾までの範囲: `10-` または `10-end`（先頭からの範囲は `-5`）
-     - 一括キーワード: `all`（全ページ）、`odd`（奇数ページ）、`even`（偶数ページ）
-     - 除外指定 (`!` または `^`): `1-50, !12, !20-25`（1〜50Pから12Pと20〜25Pを除外）、`!1`（表紙 P.1 以外の全ページ）
-4. **ページ操作（回転・削除・抽出・分割・結合）**
-   - **回転**: 選択ページまたは現在ページを左90° (`Shift+R`) / 右90° (`R`) / 180° 回転
-   - **削除**: 選択ページまたは指定ページ番号を削除（`Ctrl+Z` で復元可能）
-   - **抽出**: 指定ページを **1つの PDF にまとめて出力**（記述順での並び替え抽出にも対応）または **1ページずつ個別 PDF として出力**
-   - **分割**:
-     1. ページ範囲リストで分割（例: `1-10; 11-25; 26-end`）
-     2. 区切りページ番号の直後で分割（例: `5, 15, 30`）
-     3. N ページごとに均等分割（例: `10` ページごと、または 1ページずつ全分割）
-   - **結合**: 複数の PDF ファイルを結合。**ファイルごとに対象ページ範囲（`all`, `1-5, 8`, `!1` 等）と回転角度を個別指定**可能
-5. **元ファイルを保護する安全な保存方式**
-   - 既定は元ファイルを保護する **別名保存 (`Ctrl+S`)**（`_edited.pdf`, `_extracted.pdf`, `_merged.pdf` 等の重複しないファイル名を自動提案）
-   - 明示的な操作による **上書き保存 (`Ctrl+Shift+S`)**（確認ダイアログ付き）にも対応
+### 方法 1: リリースインストーラーを実行（推奨）
+
+1. [Releases](https://github.com/Az-kijitra/guif-pdf/releases) から最新のインストーラー `guif-pdf_0.1.0_x64-setup.exe` をダウンロードして実行します。
+2. 画面の案内に従って進めます。インストール先は既定で `%LOCALAPPDATA%\guif-pdf` です（現在のユーザーのみ、管理者権限不要）。
+3. インストールが終わったら、スタートメニューの「guif-pdf」から起動します。
+
+> **SmartScreen の警告が出たとき**
+> 本インストーラーにはコード署名がないため、Windows の SmartScreen が「Windows によって PC が保護されました」という警告を出すことがあります。
+> 警告が出た場合は、「詳細情報」を選び、表示される「実行」ボタンを押して進めてください。
+
+### 方法 2: ソースコードからビルドする
+
+<details>
+<summary>ビルド手順を表示</summary>
+
+必要なもの:
+
+- Windows 10 または Windows 11（64 ビット版）
+- Rust 1.90 以上（`cargo`）
+- Node.js 20 以上（`npm`）。E2E テストには 22.18 以上
+- Microsoft Edge WebView2 ランタイム
+
+```powershell
+git clone https://github.com/Az-kijitra/guif-pdf.git
+cd guif-pdf/app
+npm install
+
+npm run tauri dev     # 開発サーバーで起動
+npm run tauri build   # リリースビルドとインストーラーの作成
+```
+
+テストと開発の手順は [CONTRIBUTING.md](CONTRIBUTING.md) にあります。
+</details>
 
 ---
 
-## `guif` からの呼び出し設定 (`config.toml`)
+## `guif` から起動する
 
-`guif` で `Ctrl+,` を押して設定ファイル (`%APPDATA%\dev.guif.app\config.toml`) を開き、`[[external_apps]]` に以下を追加すると、`guif` 上で選択した PDF ファイルまたはフォルダーを `Ctrl+Alt+P` や右クリックメニューから直接 `guif-pdf` で開けます。
+`guif` で `Ctrl+,` を押して設定ファイル（`%APPDATA%\dev.guif.app\config.toml`）を開き、次の内容を書きます。`guif` を再起動すると、選択中の PDF やフォルダーを `Ctrl+Alt+P` や右クリックメニューから `guif-pdf` で開けます。
+
+> **注意:** `guif` は `[[external_apps]]` を 1 つでも書くと、書いたものだけを使います。既定の 4 つ（ターミナル、VS Code、エクスプローラー、GitHub Desktop）を残すには、次の例のように一緒に書いてください。
 
 ```toml
+[[external_apps]]
+name = "ターミナルで開く"
+program = "wt.exe"
+args = ["-d", "{dir}"]
+key = "Ctrl+Alt+C"
+
+[[external_apps]]
+name = "VS Codeで開く"
+program = "%LOCALAPPDATA%\\Programs\\Microsoft VS Code\\Code.exe"
+args = ["{path}"]
+key = "Ctrl+Alt+V"
+
+[[external_apps]]
+name = "エクスプローラーで開く"
+program = "%SystemRoot%\\explorer.exe"
+args = ["{dir}"]
+args_for_file = ["/select,", "{path}"]
+key = "Ctrl+Alt+E"
+
+[[external_apps]]
+name = "GitHub Desktopで開く"
+program = "%LOCALAPPDATA%\\GitHubDesktop\\GitHubDesktop.exe"
+args = ["{dir}"]
+key = "Ctrl+Alt+G"
+
 [[external_apps]]
 name = "guif-pdfで開く"
 program = "%LOCALAPPDATA%\\guif-pdf\\guif-pdf.exe"
@@ -63,39 +89,50 @@ args_for_file = ["{path}"]
 key = "Ctrl+Alt+P"
 ```
 
-> 開発ビルドのバイナリを直接指定する場合は `program = "C:\\Users\\toshi\\git\\guif-pdf\\app\\src-tauri\\target\\release\\guif-pdf.exe"` と記述してください。
+配色は `guif` の `[theme]` の `preset` に合わせます。`[colors]` と `[font]` は反映されません。
+
+---
+
+## 主な機能
+
+- **閲覧**: 連続スクロール / 単一ページ / 一覧グリッドの表示切替、テキストの選択とコピー、全文検索、目次（しおり）、前回のページとズーム率の復元。
+- **注釈**: ハイライト、文字記入（日本語対応）、付箋、四角枠、矢印、直線、手書きペン。元に戻す・やり直しに対応。
+- **ページ操作**: 回転、削除、並べ替え、抽出、分割、結合。チェックボックスでの選択と、`1-5, 8, !2` のようなページ指定の入力が連動します。
+- **安全な保存**: 既定は別名保存です。上書きは確認の後に行い、途中で失敗しても元のファイルは変わりません。未保存の編集があるときは、閉じる前や別の PDF を開く前に確認します。
+
+操作の詳細は [ユーザーマニュアル](docs/user_manual.md) を参照してください。
+
+---
+
+## 制限事項
+
+使う前に知っておいてほしい点です。詳しくは [ユーザーマニュアルの §6](docs/user_manual.md#6-保存の仕組みと制限事項) にあります。
+
+- **注釈はページに焼き込みます。** 保存した後は、注釈として編集できません。文字記入と付箋は画像として書き込むため、検索の対象になりません。元の PDF を残したいときは別名で保存してください。
+- **暗号化された PDF は閲覧のみです。** 権限パスワード付きの PDF は開けますが、編集や保存はできません。開くときにパスワードが必要な PDF は開けません。
+- **電子署名は無効になります。** 署名付きの PDF を保存すると、署名は有効でなくなります。
+- **抽出・分割・結合の出力には、しおりとフォームを引き継ぎません。** 全ページの保存では引き継ぎます。
+- **対応 OS は Windows 10 / 11（64 ビット版）だけです。** 表示とメッセージは日本語のみです。
+
+---
+
+## アンインストール
+
+Windows の「設定」→「アプリ」から「guif-pdf」を選んでアンインストールします。「アプリのデータを削除する」にチェックを入れると、設定（`%APPDATA%\dev.guif.pdf`）も削除します。
 
 ---
 
 ## ドキュメント
 
-- [ユーザーマニュアル (操作方法・メニュー一覧・ページ指定書式・ショートカットキー)](docs/user_manual.md)
-
----
-
-## 開発・ビルド手順
-
-```powershell
-cd C:\Users\toshi\git\guif-pdf\app
-
-# 依存パッケージのインストール
-npm install
-
-# フロントエンド単体テスト (Vitest)
-npm test
-
-# バックエンド単体テスト (Rust)
-cargo test --manifest-path src-tauri/Cargo.toml
-
-# 開発サーバー起動
-npm run tauri dev
-
-# リリースビルド & NSIS インストーラー作成
-npm run tauri build
-```
+- [ユーザーマニュアル](docs/user_manual.md): 操作方法、ショートカットキー、ページ指定の書式、保存の仕組み、トラブルシューティング
+- [仕様](docs/specs/): 保存の動作、`guif` との連携、ページ指定の書式
+- [変更履歴](CHANGELOG.md)
+- [開発に参加するには](CONTRIBUTING.md) / [セキュリティ](SECURITY.md)
 
 ---
 
 ## ライセンス
 
-MIT License
+[MIT License](LICENSE)
+
+同梱するソフトウェアとデータ（PDF.js、pdf-lib、CMap データ、標準フォントなど）のライセンスは [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) にあります。

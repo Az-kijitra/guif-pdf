@@ -10,7 +10,15 @@
     "preview": "vite preview",
     "prepare": "node scripts/copy-pdfjs-assets.mjs && (svelte-kit sync || echo \"\")",
     "test": "vitest run",
-    "tauri": "tauri"
+    "test:watch": "vitest",
+    "check": "svelte-kit sync && svelte-check && tsc --noEmit",
+    "e2e": "node e2e/run.mjs",
+    "e2e:build": "tauri build --debug --no-bundle",
+    "docs:screenshot": "node e2e/screenshot.mjs",
+    "tauri": "tauri",
+    "notices": "node scripts/generate-third-party-notices.mjs",
+    "release:check": "node scripts/release/versions.mjs",
+    "release:build": "node scripts/release/build.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.2.0",
