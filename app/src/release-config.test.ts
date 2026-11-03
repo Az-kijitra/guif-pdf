@@ -33,6 +33,12 @@ describe("release configuration", () => {
     }
   });
 
+  it("the installer and the uninstaller use the app icon", () => {
+    expect(conf.bundle.icon).toContain("icons/icon.ico");
+    expect(conf.bundle.windows.nsis.installerIcon).toBe("icons/icon.ico");
+    expect(conf.bundle.windows.nsis.uninstallerIcon).toBe("icons/icon.ico");
+  });
+
   it("ships the license and the notices", () => {
     expect(Object.keys(conf.bundle.resources)).toEqual(
       expect.arrayContaining(["../../LICENSE", "../../THIRD_PARTY_NOTICES.md"])
