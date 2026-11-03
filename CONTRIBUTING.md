@@ -4,7 +4,7 @@
 
 ## 準備
 
-必要なもの: Windows 10 / 11、Rust 1.90 以上、Node.js 20 以上（E2E には 22.18 以上）、WebView2 ランタイム。
+必要なもの: Windows 10 / 11、Rust 1.90 以上、Node.js 22.18 以上、WebView2 ランタイム。
 
 ```powershell
 cd app

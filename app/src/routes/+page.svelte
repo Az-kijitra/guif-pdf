@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import { rotateAnnotationWithPage } from "$lib/annotationRotation";
-  import { resolveKeyCommand } from "$lib/keyCommands";
+  import { rotateAnnotationWithPage } from "#lib/annotationRotation.ts";
+  import { resolveKeyCommand } from "#lib/keyCommands.ts";
   import {
     base64ToUint8Array,
     formatBytes,
@@ -19,18 +19,18 @@
     uint8ArrayToBase64,
     writeMultiplePdfsBase64,
     writePdfBase64,
-  } from "$lib/api";
-  import MenuBar from "$lib/components/MenuBar.svelte";
-  import MergeModal from "$lib/components/MergeModal.svelte";
-  import PageOperationBar from "$lib/components/PageOperationBar.svelte";
-  import PdfPageCanvas from "$lib/components/PdfPageCanvas.svelte";
-  import SaveExtractModal from "$lib/components/SaveExtractModal.svelte";
-  import ShortcutHelpModal from "$lib/components/ShortcutHelpModal.svelte";
-  import SidebarPanel from "$lib/components/SidebarPanel.svelte";
-  import SplitModal from "$lib/components/SplitModal.svelte";
-  import ThumbnailItem from "$lib/components/ThumbnailItem.svelte";
-  import TopToolbar from "$lib/components/TopToolbar.svelte";
-  import { formatPageSet, parsePageSpec } from "$lib/pageRangeParser";
+  } from "#lib/api.ts";
+  import MenuBar from "#lib/components/MenuBar.svelte";
+  import MergeModal from "#lib/components/MergeModal.svelte";
+  import PageOperationBar from "#lib/components/PageOperationBar.svelte";
+  import PdfPageCanvas from "#lib/components/PdfPageCanvas.svelte";
+  import SaveExtractModal from "#lib/components/SaveExtractModal.svelte";
+  import ShortcutHelpModal from "#lib/components/ShortcutHelpModal.svelte";
+  import SidebarPanel from "#lib/components/SidebarPanel.svelte";
+  import SplitModal from "#lib/components/SplitModal.svelte";
+  import ThumbnailItem from "#lib/components/ThumbnailItem.svelte";
+  import TopToolbar from "#lib/components/TopToolbar.svelte";
+  import { formatPageSet, parsePageSpec } from "#lib/pageRangeParser.ts";
   import {
     ENCRYPTED_PDF_MESSAGE,
     buildEditedDocument,
@@ -38,7 +38,7 @@
     buildSplitPdfFiles,
     getPdfPageCountFromBase64,
     mergePdfQueue,
-  } from "$lib/pdfEngine";
+  } from "#lib/pdfEngine.ts";
   import type {
     FolderEntry,
     MergeQueueItem,
@@ -49,7 +49,7 @@
     ToolMode,
     ViewLayoutMode,
     VirtualPage,
-  } from "$lib/types";
+  } from "#lib/types.ts";
 
   // PDF.js library reference (loaded on mount in browser)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

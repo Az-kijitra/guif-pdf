@@ -32,7 +32,7 @@ GUI ファイラー [`guif`](https://github.com/Az-kijitra/guif) の外部アプ
 
 - Windows 10 または Windows 11（64 ビット版）
 - Rust 1.90 以上（`cargo`）
-- Node.js 20 以上（`npm`）。E2E テストには 22.18 以上
+- Node.js 22.18 以上（`npm`）
 - Microsoft Edge WebView2 ランタイム
 
 ```powershell
