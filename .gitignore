@@ -9,3 +9,12 @@ src-tauri/WixTools/
 *.log
 .DS_Store
 Thumbs.db
+*.pdb
+**/*.rs.bk
+*.tmp
+app/src-tauri/gen/
+.vscode/
+.idea/
+.env
+.env.local
+desktop.ini
